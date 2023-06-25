@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	utils "github.com/sashabaranov/go-openai/internal"
 )
@@ -124,10 +125,21 @@ func sendRequestStream[T streamable](client *Client, req *http.Request) (*stream
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Connection", "keep-alive")
-
-	resp, err := client.config.HTTPClient.Do(req) //nolint:bodyclose // body is closed in stream.Close()
-	if err != nil {
-		return new(streamReader[T]), err
+	var resp *http.Response
+	var err error
+	client.config.HTTPClient.Timeout = 3 * time.Second
+	count := 0
+	for {
+		resp, err = client.config.HTTPClient.Do(req) //nolint:bodyclose // body is closed in stream.Close()
+		if err != nil {
+			return new(streamReader[T]), err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests && count < 3 {
+			client.config.HTTPClient.Timeout *= 3
+		} else {
+			break
+		}
+		count++
 	}
 	if isFailureStatusCode(resp) {
 		return new(streamReader[T]), client.handleErrorResp(resp)
